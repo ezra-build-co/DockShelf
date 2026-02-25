@@ -194,6 +194,13 @@ struct ShelfItemView: View {
             .cornerRadius(6)
             // Add a helpful tooltip
             .help(item.url.lastPathComponent)
+            // Force Touch for Quick Look
+            .overlay(
+                ForceClickable(onForceClick: {
+                    QuickLookController.shared.previewFile(at: item.url)
+                })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            )
 
             if isHovering {
                 Button(action: onRemove) {
