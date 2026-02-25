@@ -16,6 +16,10 @@ struct ForceClickable: NSViewRepresentable {
         recognizer.delaysPrimaryMouseButtonEvents = false
         view.addGestureRecognizer(recognizer)
 
+        // This is important: The view needs to accept mouse events for the recognizer to work,
+        // but we want clicks to pass through if they aren't force clicks.
+        // However, NSView by default accepts clicks.
+        // Let's ensure the view can become first responder if needed.
         return view
     }
 

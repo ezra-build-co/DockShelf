@@ -205,12 +205,12 @@ struct ShelfItemView: View {
             if isHovering {
                 Button(action: onRemove) {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
+                        .font(.system(size: 12))
                         .foregroundColor(.secondary)
                         .background(Circle().fill(Color.white))
                 }
                 .buttonStyle(.plain)
-                .offset(x: 6, y: -6)
+                .offset(x: 4, y: -4)
             }
         }
         .onHover { hovering in
