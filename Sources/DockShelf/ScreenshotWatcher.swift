@@ -1,140 +1,105 @@
 import Foundation
 import Combine
 import AppKit
-import Darwin // For O_EVTONLY and open/close
 
 class ScreenshotWatcher {
     private var model: ShelfModel
-    private var source: DispatchSourceFileSystemObject?
-    private var directoryFileDescriptor: CInt = -1
-    private var lastScanDate: Date = Date()
-    private let queue = DispatchQueue(label: "com.dockshelf.screenshotwatcher")
+    private var query: NSMetadataQuery?
+    private var isStarted = false
+
+    // Track seen items to avoid processing old screenshots on startup
+    private var seenItems: Set<String> = []
     
     init(model: ShelfModel) {
         self.model = model
     }
     
     func start() {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-            
-            // Determine screenshot location (default to Desktop)
-            let path = self.getScreenshotLocation()
-            let url = URL(fileURLWithPath: path)
-            
-            // Open the directory
-            // We need to use low-level C API to open for monitoring
-            // path.withCString creates a temporary pointer valid only within the closure
-            let fd = path.withCString { ptr -> CInt in
-                return open(ptr, O_EVTONLY)
-            }
-            
-            self.directoryFileDescriptor = fd
-            
-            guard self.directoryFileDescriptor != -1 else {
-                print("Error: Could not open screenshot directory for monitoring: \(path)")
-                return
-            }
-            
-            // Create the source
-            let src = DispatchSource.makeFileSystemObjectSource(
-                fileDescriptor: self.directoryFileDescriptor,
-                eventMask: .write,
-                queue: self.queue
-            )
-            self.source = src
-            
-            src.setEventHandler { [weak self] in
-                self?.checkForNewScreenshots(in: url)
-            }
-            
-            src.setCancelHandler { [weak self] in
-                guard let self = self else { return }
-                close(self.directoryFileDescriptor)
-            }
-            
-            src.resume()
-            print("Started watching for screenshots in: \(path)")
+        guard !isStarted else { return }
+        isStarted = true
+
+        let query = NSMetadataQuery()
+        self.query = query
+
+        // Use predicate string format for kMDItemIsScreenCapture
+        query.predicate = NSPredicate(format: "kMDItemIsScreenCapture == 1")
+        query.searchScopes = [NSMetadataQueryUserHomeScope]
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(queryDidUpdate(_:)),
+            name: NSMetadataQuery.didUpdateNotification,
+            object: query
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(queryDidFinishGathering(_:)),
+            name: NSMetadataQuery.didFinishGatheringNotification,
+            object: query
+        )
+
+        // Start the query on the main thread (required for NSMetadataQuery)
+        DispatchQueue.main.async {
+            query.start()
         }
+
+        print("Started watching for screenshots via Spotlight metadata.")
     }
     
     func stop() {
-        source?.cancel()
-        source = nil
+        guard isStarted, let query = query else { return }
+
+        query.stop()
+        NotificationCenter.default.removeObserver(self)
+        self.query = nil
+        isStarted = false
     }
     
-    private func getScreenshotLocation() -> String {
-        // Read user default for screencapture location
-        let task = Process()
-        task.launchPath = "/usr/bin/defaults"
-        task.arguments = ["read", "com.apple.screencapture", "location"]
+    @objc private func queryDidFinishGathering(_ notification: Notification) {
+        guard let query = notification.object as? NSMetadataQuery else { return }
         
-        let pipe = Pipe()
-        task.standardOutput = pipe
+        query.disableUpdates()
         
-        // Handle potential errors (e.g. key not found) by ignoring stderr
-        let errorPipe = Pipe()
-        task.standardError = errorPipe
-        
-        do {
-            try task.run()
-            task.waitUntilExit()
-            
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !output.isEmpty {
-                // Expand tilde if present (though defaults usually returns full path)
-                let expandedPath = NSString(string: output).expandingTildeInPath
-                if FileManager.default.fileExists(atPath: expandedPath) {
-                    return expandedPath
-                }
+        // Mark existing screenshots as "seen" so we don't re-add them
+        for i in 0..<query.resultCount {
+            if let item = query.result(at: i) as? NSMetadataItem,
+               let path = item.value(forAttribute: NSMetadataItemPathKey) as? String {
+                seenItems.insert(path)
             }
-        } catch {
-            print("Error reading defaults: \(error)")
         }
         
-        // Fallback to Desktop
-        let paths = NSSearchPathForDirectoriesInDomains(.desktopDirectory, .userDomainMask, true)
-        return paths.first ?? "/tmp"
+        query.enableUpdates()
+        print("Initial screenshot scan complete. Watching for new items...")
     }
     
-    private func checkForNewScreenshots(in directory: URL) {
-        let fileManager = FileManager.default
-        let now = Date()
+    @objc private func queryDidUpdate(_ notification: Notification) {
+        guard let query = notification.object as? NSMetadataQuery else { return }
+
+        query.disableUpdates()
         
-        do {
-            let fileURLs = try fileManager.contentsOfDirectory(
-                at: directory,
-                includingPropertiesForKeys: [.creationDateKey, .isRegularFileKey],
-                options: .skipsHiddenFiles
-            )
+        // Correct key: NSMetadataQueryUpdateAddedItemsKey
+        if let userInfo = notification.userInfo,
+           let addedItems = userInfo[NSMetadataQueryUpdateAddedItemsKey] as? [NSMetadataItem] {
             
-            for url in fileURLs {
-                let resources = try url.resourceValues(forKeys: [.creationDateKey, .isRegularFileKey])
-                
-                guard let isFile = resources.isRegularFile, isFile,
-                      let creationDate = resources.creationDate else { continue }
-                
-                // Check if created since last scan
-                if creationDate > lastScanDate {
-                    let filename = url.lastPathComponent
-                    // Check for standard macOS screenshot naming
-                    if (filename.contains("Screen Shot") || filename.contains("Screenshot")) &&
-                       (filename.hasSuffix(".png") || filename.hasSuffix(".jpg") || filename.hasSuffix(".jpeg")) {
+            for item in addedItems {
+                if let path = item.value(forAttribute: NSMetadataItemPathKey) as? String {
+                    // Check if we've already seen this path (e.g. from initial scan or previous update)
+                    if !seenItems.contains(path) {
+                        seenItems.insert(path)
                         
-                        print("New screenshot detected: \(filename)")
+                        let url = URL(fileURLWithPath: path)
                         
+                        print("New screenshot detected: \(path)")
+                        // Ensure model update happens on main actor
                         DispatchQueue.main.async {
                             self.model.addItem(url: url)
                         }
                     }
                 }
             }
-            
-            lastScanDate = now
-            
-        } catch {
-            print("Error scanning for screenshots: \(error)")
         }
+
+        query.enableUpdates()
     }
 }
