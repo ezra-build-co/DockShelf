@@ -28,14 +28,14 @@ class ScreenshotWatcher {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(queryDidUpdate(_:)),
-            name: NSMetadataQuery.didUpdateNotification,
+            name: .NSMetadataQueryDidUpdate,
             object: query
         )
 
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(queryDidFinishGathering(_:)),
-            name: NSMetadataQuery.didFinishGatheringNotification,
+            name: .NSMetadataQueryDidFinishGathering,
             object: query
         )
 
