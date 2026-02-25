@@ -32,6 +32,9 @@ class QuickLookController: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDel
             if !panel.isVisible {
                 panel.makeKeyAndOrderFront(nil)
             }
+
+            // Force the panel to update its content immediately
+            panel.refreshCurrentPreviewItem()
         }
     }
 
