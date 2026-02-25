@@ -19,7 +19,11 @@ struct ShelfView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(spacing: 10) {
                             ForEach(model.items) { item in
-                                ShelfItemView(item: item)
+                                ShelfItemView(item: item, onRemove: {
+                                    Task {
+                                        await model.removeItem(id: item.id)
+                                    }
+                                })
                                     .frame(width: geometry.size.height - 10, height: geometry.size.height - 10) // Square items fitting height
                                     .onTapGesture(count: 2) {
                                         NSWorkspace.shared.open(item.url)
@@ -47,6 +51,8 @@ struct ShelfView: View {
                                         Button("Remove") {
                                             // Perform removal without animation inside the button action to prevent layout crashes
                                             Task {
+                                                // Add a small delay to allow context menu to dismiss
+                                                try? await Task.sleep(nanoseconds: 200_000_000)
                                                 await model.removeItem(id: item.id)
                                             }
                                         }
@@ -85,7 +91,11 @@ struct ShelfView: View {
                     ScrollView(.vertical, showsIndicators: false) {
                         LazyVStack(spacing: 10) {
                             ForEach(model.items) { item in
-                                ShelfItemView(item: item)
+                                ShelfItemView(item: item, onRemove: {
+                                    Task {
+                                        await model.removeItem(id: item.id)
+                                    }
+                                })
                                     .frame(width: geometry.size.width - 10, height: geometry.size.width - 10) // Square items fitting width
                                     .onTapGesture(count: 2) {
                                         NSWorkspace.shared.open(item.url)
@@ -113,6 +123,8 @@ struct ShelfView: View {
                                         Button("Remove") {
                                             // Perform removal without animation inside the button action to prevent layout crashes
                                             Task {
+                                                // Add a small delay to allow context menu to dismiss
+                                                try? await Task.sleep(nanoseconds: 200_000_000)
                                                 await model.removeItem(id: item.id)
                                             }
                                         }
@@ -167,17 +179,37 @@ struct ShelfView: View {
 
 struct ShelfItemView: View {
     let item: ShelfItem
+    var onRemove: () -> Void
+    @State private var isHovering = false
     
     var body: some View {
-        VStack {
-            Image(nsImage: item.displayImage)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
+        ZStack(alignment: .topTrailing) {
+            VStack {
+                Image(nsImage: item.displayImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            }
+            .padding(4)
+            .background(Color.black.opacity(0.1))
+            .cornerRadius(6)
+            // Add a helpful tooltip
+            .help(item.url.lastPathComponent)
+
+            if isHovering {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.secondary)
+                        .background(Circle().fill(Color.white))
+                }
+                .buttonStyle(.plain)
+                .offset(x: 6, y: -6)
+            }
         }
-        .padding(4)
-        .background(Color.black.opacity(0.1))
-        .cornerRadius(6)
-        // Add a helpful tooltip
-        .help(item.url.lastPathComponent)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
     }
 }
